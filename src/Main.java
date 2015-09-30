@@ -6,8 +6,7 @@ import javax.swing.*;
 import java.awt.*;
 import java.awt.geom.Arc2D;
 import java.awt.image.BufferedImage;
-import java.io.File;
-import java.io.IOException;
+import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -35,6 +34,9 @@ public class Main {
     }
 
     private static BufferedImage compressImage(BufferedImage bufferedImage, int targetWidth, int targetHeight) {
+        if (targetWidth == bufferedImage.getWidth() && targetHeight == bufferedImage.getHeight()) {
+            return bufferedImage;
+        }
         int scale = (int) Math.floor(Math.min(
                 (float) bufferedImage.getWidth() / targetWidth,
                 (float) bufferedImage.getHeight() / targetHeight
@@ -156,6 +158,10 @@ public class Main {
         return 0;
     }
 
+    private static double cachedist(int a, int b) {
+        return cache1.get(a).dist(cache2[b]);
+    }
+
     private static BufferedImage makeGrid(BufferedImage[] images, int w, int h) {
         // assuming images.size() = w * h, \forall i, j: images[i].size = images[j].size
         int width = images[0].getWidth();
@@ -179,18 +185,84 @@ public class Main {
 
     private static List<String> filenames;
 
-    public static final int sampleW = 20;
-    public static final int sampleH = 20;
+    public static final int sampleW = 15;
+    public static final int sampleH = 10;
+
+    private static class Counter {
+        private int x;
+        public Counter() {
+            x = 0;
+        }
+        public void inc() {
+            x++;
+        }
+        public int get() {
+            return x;
+        }
+    }
+
+    private static class RGB {
+        int r;
+        int g;
+        int b;
+
+        public RGB(long r, long g, long b) {
+            this.r = (int) r;
+            this.g = (int) g;
+            this.b = (int) b;
+        }
+
+        public double dist(RGB other) {
+            return Math.sqrt((double) (sqr(r - other.r) + sqr(g - other.g) + sqr(b - other.b)) / 3.0);
+        }
+
+    }
+
+    private static RGB cacheColor(BufferedImage bf, int xOffset, int yOffset, int width, int height) {
+        int[] rgb = bf.getRGB(
+                xOffset,
+                yOffset,
+                width,
+                height,
+                null,
+                0,
+                width
+        );
+        long r = 0;
+        long g = 0;
+        long b = 0;
+        for (int i = 0; i < width; i++) {
+            for (int j = 0; j < height; j++) {
+                int p = rgb[i + j * width];
+                r += p & 0xFF;
+                g += (p >> 8) & 0xFF;
+                b += (p >> 16) & 0xFF;
+            }
+        }
+        return new RGB(r / width / height, g / width / height, b / width / height);
+    }
+
+    private static List<RGB> cache1 = new ArrayList<>();
+    private static RGB[] cache2;
 
     private static BufferedImage[] loadImages() throws IOException {
         filenames = new ArrayList<>();
+        BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream("list.txt")));
+        br.lines().forEach(filenames::add);
         List<BufferedImage> result = new ArrayList<>();
+        final Counter c = new Counter();
         Files.list(new File("data\\").toPath()).forEach(
                 (Path p) -> {
                     try {
+                        c.inc();
+                        //if (c.get() > 4590) {
                         BufferedImage bf = compressImage(ImageIO.read(p.toFile()), sampleW, sampleH);
+                        //ImageIO.write(bf, "bmp", new File("data\\" + (c.get() - 1) + ".bmp"));
                         result.add(bf);
-                        filenames.add(p.toFile().getName());
+                        cache1.add(cacheColor(bf, 0, 0, sampleW, sampleH));
+                        System.out.println(c.get());
+                        //filenames.add(p.toFile().getName());
+                        //}
                     } catch (IOException ignored) {
                     }
                 }
@@ -198,34 +270,90 @@ public class Main {
         return result.toArray(new BufferedImage[result.size()]);
     }
 
+    private static String getExt(String s) {
+        int i = s.length() - 1;
+        while (s.charAt(i) != '.') {
+            i--;
+        }
+        return s.substring(i);
+    }
+
     public static void main(String[] args) throws IOException {
-        BufferedImage bufferedImage = compressImage(ImageIO.read(new File("data\\2.jpg")), 1920, 1080);
+        long time = System.nanoTime();
+        BufferedImage bufferedImage = compressImage(ImageIO.read(new File("in.jpg")), 2400, 1320);
         if (bufferedImage == null) {
             return;
         }
-        BufferedImage[] images = loadImages();
-        System.out.println("Images loaded: " + images.length);
+        BufferedImage image;
+        if (true) {
+            BufferedImage[] images = loadImages();
+            System.out.println("Images loaded: " + images.length);
 
-        int xCount = bufferedImage.getWidth() / sampleW;
-        int yCount = bufferedImage.getHeight() / sampleH;
-        System.out.println(xCount);
-        BufferedImage[] imgArray = new BufferedImage[xCount * yCount];
-        System.out.println(dist(images[0], bufferedImage, 0, 0));
-        for (int i = 0; i < xCount; i++) {
+            int xCount = bufferedImage.getWidth() / sampleW;
+            int yCount = bufferedImage.getHeight() / sampleH;
+            System.out.println(yCount);
+
+            cache2 = new RGB[xCount * yCount];
             for (int j = 0; j < yCount; j++) {
-                final int ci = i;
-                final int cj = j;
-                imgArray[i + j * xCount] =
-                        Arrays.stream(images).min((BufferedImage a, BufferedImage b) -> Double.compare(
-                                dist(a, bufferedImage, ci * sampleW, cj * sampleH),
-                                dist(b, bufferedImage, ci * sampleW, cj * sampleH)
-                        )
-                ).get();
+                for (int i = 0; i < xCount; i++) {
+                    cache2[i + j * xCount] = cacheColor(bufferedImage, sampleW * i, sampleH * j, sampleW, sampleH);
+                }
             }
-            System.out.print(i + ", ");
+
+            BufferedImage[] imgArray = new BufferedImage[xCount * yCount];
+            //StringBuilder sb = new StringBuilder();
+            PrintWriter pw = new PrintWriter(new FileOutputStream("copy.bat"));
+            for (int j = 0; j < yCount; j++) {
+                pw.print("montage ");
+                for (int i = 0; i < xCount; i++) {
+                    final int ci = i;
+                    final int cj = j;
+                    if (false) {
+                        int minInd = 0;
+                        double minDist = dist(images[0], bufferedImage, ci * sampleW, cj * sampleH);
+                        for (int k = 1; k < images.length; k++) {
+                            double newMin = dist(images[k], bufferedImage, ci * sampleW, cj * sampleH);
+                            if (newMin < minDist) {
+                                minInd = k;
+                                minDist = newMin;
+                            }
+                        }
+                        imgArray[i + j * xCount] = images[minInd];
+                        /*imgArray[i + j * xCount] =
+                                Arrays.stream(images).min((BufferedImage a, BufferedImage b) -> Double.compare(
+                                                dist(a, bufferedImage, ci * sampleW, cj * sampleH),
+                                                dist(b, bufferedImage, ci * sampleW, cj * sampleH)
+                                        )
+                                ).get();*/
+                    } else {
+                        int minInd = 0;
+                        double minDist = cachedist(0, ci + cj * xCount);
+                        for (int k = 1; k < images.length; k++) {
+                            double newMin = cachedist(k, ci + cj * xCount);
+                            if (newMin < minDist) {
+                                minInd = k;
+                                minDist = newMin;
+                            }
+                        }
+                        //sb.append(filenames.get(minInd)).append(" ");
+                        pw.print("\"" + filenames.get(minInd) + "\" ");
+                        imgArray[i + j * xCount] = images[minInd];
+                    }
+                }
+                pw.println("-tile 1x -resize 60x90 -geometry +0+0 folder\\" + j + ".JPG");
+                System.out.print(j + ", ");
+            }
+            System.out.println();
+            //pw.print("montage ");
+            //pw.print(sb.toString());
+            //pw.print("-resize 20x30 -tile " + xCount + "x" + yCount + " -geometry 20x30+0+0 out.png");
+            pw.close();
+            image = makeGrid(imgArray, xCount, yCount);
+        } else {
+            image = bufferedImage;
         }
-        System.out.println();
-        BufferedImage image = makeGrid(imgArray, xCount, yCount);
+        ImageIO.write(image, "png", new File("out.png"));
+        System.out.println("Время: " + (System.nanoTime() - time) / 1000000000 + " секунд");
         JFrame jFrame = new JFrame("Lel");
         MyPanel myPanel = new MyPanel(image);
         myPanel.setPreferredSize(new Dimension(image.getWidth(), image.getHeight()));
